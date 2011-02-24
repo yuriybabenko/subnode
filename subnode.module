@@ -1,0 +1,1264 @@
+<?php
+
+define('SUBNODE_PATH',  drupal_get_path('module', 'subnode'));
+
+/************************************************************
+					DRUPAL HOOKS
+************************************************************/
+
+/**
+ * Implementation of hook_menu();
+ */
+function subnode_menu()
+{
+  $items = array();
+  
+  $items['subnode/ahah/subform/%/%'] = array(
+    'title'             => 'Add subform',
+    'page callback'     => 'subnode_ahah_subform',
+		'page arguments'    => array(3, 4),
+		'access arguments'  => array('administer site configuration'),
+  );
+
+  $items['subnode/ahah/remove/%/%/%'] = array(
+    'title'             => 'Remove element',
+    'page callback'     => 'subnode_ahah_remove',
+    'page arguments'    => array(3, 4, 5),
+    'access arguments'  => array('administer site configuration'),
+  );
+
+  $items['subnode/ahah/filefield/%/%/%/%'] = array(
+    'page callback' => 'subnode_ahah_filefield',
+    'page arguments' => array(3, 4, 5, 6),
+    'access callback' => 'filefield_edit_access',
+    'access arguments' => array(3, 4),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_menu_alter();
+ */
+function subnode_menu_alter(&$items)
+{
+	if(isset($items['filefield/ahah/%/%/%'])) {
+		$items['filefield/ahah/%/%/%']['page callback'] = 'subnode_ahah_filefield';
+		$items['filefield/ahah/%/%/%']['page arguments'][] = 5;
+	}
+}
+
+/**
+ * Implementation of hook_init();
+ * @return 
+ */
+function subnode_init()
+{
+  $args = arg();
+	
+	if($args[0] == 'node' && ($args[1] == 'add' || $args[2] == 'edit')) {
+	  drupal_add_js(SUBNODE_PATH.'/js/subnode.js');
+		drupal_add_css(SUBNODE_PATH.'/css/subnode.css');
+	}
+}
+
+/**
+ * Implementation of hook_form_alter();
+ */
+function subnode_form_alter(&$form, &$form_state, $form_id)
+{
+	//modify all node add/edit forms to add subnode data
+	  $types = node_get_types('names');
+		if(preg_match('/^('.implode('|', array_keys($types)).')_node_form$/', $form_id)) {
+			//correctly set up the input formats to ensure WYSIWYG functionality
+			//we need to separate the 'name' value of the input format radio groups between
+			//each subnode by modifying the parent element value
+      if(isset($form['#subnode_include']) && $form['#subnode_include']) {
+        if(isset($form['body_field']['format'])) {
+          $token = md5(mt_rand(0, 9999).time().mt_rand(0, 9999));
+
+          foreach($form['body_field']['format'] as $key => $element) {
+            if(is_numeric($key) && $element['#type'] == 'radio') {
+              foreach($form['body_field']['format'][$key]['#parents'] as &$parent) {
+                if($parent == 'format') {
+                  $parent = 'format_'.$token;
+                }
+              }
+            }
+          }
+        }
+      }
+			
+			$settings = _subnode_get_settings();
+
+			if(isset($settings[$form['type']['#value']])) {
+			  foreach($settings[$form['type']['#value']] as $subtype => $quantity) {
+			  	if($quantity) {
+			  		if(empty($form['#attributes']['class'])) {
+			  		  $form['#attributes']['class'] = '';
+						}
+						
+						if(!preg_match('/subnode/', $form['#attributes']['class'])) {
+						  $form['#attributes']['class'] .= ' subnode';
+						}
+						
+						$form['subnode_'.$subtype] = array(
+						  '#collapsible'  => TRUE,
+							'#title'        => t('@type section', array('@type' => $types[$subtype])),
+							'#tree'         => TRUE,
+						  '#type'         => 'fieldset',
+							'#weight'       => content_extra_field_weight($form['type']['#value'], 'subnode_'.$form['type']['#value'].'_'.$subtype),
+						);
+						
+						//unlimited and > 1 (ahah-added) subforms
+  					if($quantity != 1) {
+  						//add existing subnodes as subforms
+								if(!empty($form['#node']->subnode_children[$subtype])) {
+									while($child = array_shift($form['#node']->subnode_children[$subtype])) {
+										$field_count = _subnode_increment_field_count($subtype);
+										
+										$field_count--;
+										
+										$title = $child->title;
+										
+										if(isset($form_state['values']['subnode_'.$subtype][$field_count]['title'])) {
+											$title = $form_state['values']['subnode_'.$subtype][$field_count]['title'];
+										}
+										
+		                $form['subnode_'.$subtype][$field_count] = array(
+		                  '#collapsed'    => TRUE,
+		                  '#collapsible'  => TRUE,
+		                  '#title'        => $title,
+		                  '#type'         => 'fieldset',
+		                );
+		                
+		                foreach(_subnode_add_subform_structure(array('nid' => $child->nid)) as $key => $value) {
+											if(!isset($form['subnode_'.$subtype][$field_count][$key])) {
+											  $form['subnode_'.$subtype][$field_count][$key] = $value;
+												
+												//if we are viewing the form after the 'preview node' action, we need to override
+                        //the existing form values with what's in the $form_state
+	                      if(!empty($form_state['values']['subnode_'.$subtype][$field_count][$key])) {
+	                        $form['subnode_'.$subtype][$field_count][$key]['#default_value'] = $form_state['values']['subnode_'.$subtype][$field_count][$key];
+	                      }
+												
+												//cck fields
+												if(is_array($value) && isset($value[0]['#type'])) {
+													switch($value[0]['#type']) {
+														case 'link':
+															if(!empty($form_state['values']['subnode_'.$subtype][$field_count][$key][0])) {																
+															  $form['subnode_'.$subtype][$field_count][$key][0]['#default_value'] = array_merge($form['subnode_'.$subtype][$field_count][$key][0]['#default_value'], $form_state['values']['subnode_'.$subtype][$field_count][$key][0]);
+															}
+															break;
+													}
+												}
+											}
+		                }
+										
+										//populate the body field with proper content during 'preview node' actions
+			              if(!empty($form_state['values']['subnode_'.$subtype][$field_count]['body_field']['body'])) {
+			                $form['subnode_'.$subtype][$field_count]['body_field']['body']['#default_value'] = $form_state['values']['subnode_'.$subtype][$field_count]['body_field']['body'];
+			              }
+										
+										$form['subnode_'.$subtype][$field_count]['remove'] = array(
+								      '#attributes' => array(
+								        'class'        => 'subform-remove',
+								        'field_name'   => 'subnode_'.$subtype,
+								        'field_count'  => $field_count,
+								      ),
+											'#suffix'     => theme('subnode_remove_confirm'),
+								      '#title'      => t('Remove this !type', array('!type' => '<em>'.$types[$subtype].'</em>',)),
+								      '#type'       => 'checkbox',
+								    );
+									}
+									
+									$child = array_shift($form['#node']->subnode_children[$subtype]);
+	                $options = array('nid' => $child->nid);
+	              }
+							
+							//add button to insert new subforms
+								$form['subnode_'.$subtype]['add_subform'] = array(
+	                '#ahah'       => array(
+										'path'      => 'subnode/ahah/subform/'.$form['type']['#value'].'/'.$subtype,
+										'wrapper'   => 'add-'.$form['type']['#value'],
+										'method'    => 'append',
+										'effect'    => 'fade',
+									),
+									'#prefix'     => '<div id="add-'.$form['type']['#value'].'"></div>',
+								  '#type'       => 'button',
+									'#value'      => t('Add @type', array('@type' => $types[$subtype])),
+									'#weight'     => 999,
+								);
+						}
+						//single subform
+						else {
+							//check for existing content, or load empty form
+							if(!empty($form['#node']->subnode_children[$subtype])) {
+								$child = array_shift($form['#node']->subnode_children[$subtype]);
+								$options = array('nid' => $child->nid);
+							}
+							else {
+                $options = array('type' => $subtype);								
+							}
+							
+							//bring the body field out from the 'body_field' wrapper
+							//TODO: is this block of code necessary?
+							if(!empty($form_state['values']['subnode_'.$subtype][0]['body_field'])) {
+								$form_state['values']['subnode_'.$subtype][0]['body'] = $form_state['values']['subnode_'.$subtype][0]['body_field']['body'];
+								unset($form_state['values']['subnode_'.$subtype][0]['body_field']);
+							}
+							
+							foreach(_subnode_add_subform_structure($options) as $key => $value) {
+								if(!isset($form['subnode_'.$subtype][0][$key])) {
+								  $form['subnode_'.$subtype][0][$key] = $value;
+									
+									//if we are viewing the form after the 'preview node' action, we need to override
+									//the existing form values with what's in the $form_state
+									if(!empty($form_state['values']['subnode_'.$subtype][0][$key])) {
+										$form['subnode_'.$subtype][0][$key]['#default_value'] = $form_state['values']['subnode_'.$subtype][0][$key];
+									}
+								}
+							}
+							
+							//populate the body field with proper content during 'preview node' actions
+						  if(!empty($form_state['values']['subnode_'.$subtype][0]['body'])) {
+							  $form['subnode_'.$subtype][0]['body_field']['body']['#default_value'] = $form_state['values']['subnode_'.$subtype][0]['body'];
+							}
+							
+							//set the fieldset title to the subnodes' title if its present
+							if(!empty($form['subnode_'.$subtype][0]['title']['#default_value'])) {
+								$form['subnode_'.$subtype]['#title'] = $form['subnode_'.$subtype][0]['title']['#default_value'];
+							}
+						}
+					}
+				}
+			}
+			
+			//do some cleanup for forms included as subnodes
+			if(isset($form['#subnode_include']) && $form['#subnode_include']) {
+				//shorten height of body field
+				if(isset($form['body_field'])) {
+				  $form['body_field']['body']['#rows'] = 3;
+				}
+
+				if(!isset($form['#after_build'])) {
+		      $form['#after_build'] = array();
+		    }
+			}
+			
+			$form['#after_build'][] = 'subnode_node_form_after_build';
+		}
+	//add subnode settings to the edit content type page
+		elseif($form_id == 'node_type_form') {
+			$settings = _subnode_get_settings();
+			
+			$form['subnode'] = array(
+			  '#collapsed'    => TRUE,
+				'#collapsible'  => TRUE,
+				'#description'  => t('Choose how many subnodes of each type are allowed to be added to !type nodes.', array('!type' => '<em>'.$types[$form['#node_type']->type].'</em>')),
+        '#title'        => t('Subnode settings'),
+				'#tree'         => TRUE,
+        '#type'         => 'fieldset',
+			);
+			
+			//check for subnode nesting
+			$is_subnode      = FALSE;
+			$parent_subnode  = '';
+			
+			foreach($settings as $type => $data) {
+				foreach($data as $subtype => $quantity) {
+					 if($form['#node_type']->type == $subtype && $quantity) {
+					 	 $is_subnode      = TRUE;
+						 $parent_subnode  = $type;
+						 break;
+					 }
+				}
+			}
+			
+			if($is_subnode) {
+				$form['subnode']['#description'] .= t('<br /><br /><strong>Note:</strong> !type is included as a subnode in !parent_subnode nodes, and as such cannot contain subnotes itself. <br />(Nested subnodes are not supported.)', array('!type' => '<em>'.$types[$form['#node_type']->type].'</em>', '!parent_subnode' => '<em>'.$types[$parent_subnode].'</em>'));
+			}
+			else {
+				foreach($types as $subtype => $subname) {
+	        if($subtype != $form['#node_type']->type) {
+	          $form['subnode'][$subtype] = array(
+	            '#default_value'  => isset($settings[$form['#node_type']->type][$subtype]) ? $settings[$form['#node_type']->type][$subtype] : 0,
+	            '#options'        => array(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 'unlimited' => t('Unlimited')),
+	            '#title'          => t($subname),
+	            '#type'           => 'select',
+	            '#required'       => TRUE,
+	          );  
+	        }
+	      }
+	      
+	      $form['#submit'][] = 'subnode_node_type_form_submit';
+			}
+		}
+		
+		if($form_id == 'nuts_bolts_node_form') {
+			//print_rr($form['body_field']['format']);
+			$form['body_field']['format'][1]['#attributes'] = array(
+			  'checked' => 'true',
+			);
+		}
+}
+
+/**
+ * Implementation of hook_nodeapi();
+ */
+function subnode_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL)
+{
+  switch ($op) {
+  	case 'load':
+      
+      //load child subnodes   
+        $data = array();
+        $result = db_query("SELECT child FROM {subnode} WHERE parent = %d", $node->nid);
+
+        while($row = db_fetch_object($result)) {
+           if($child = node_load($row->child)) {
+             $data['subnode_children'][$child->type][$child->nid] = $child;
+           }
+        }
+				
+			//load parent nodes
+			  if($parent = db_result(db_query("SELECT parent FROM {subnode} WHERE child = %d", $node->nid))) {
+			    $data['subnode_parent'] = $parent;
+					$data['subnode_display'] = TRUE;
+				}
+      
+      return $data;
+          
+      break;
+		
+		case 'validate':
+			
+				//we need to reset the field count during form validation, otherwise the count will
+				//stack up with every 'node preview' submit. 
+				_subnode_reset_field_count();
+									
+				break;
+		
+    case 'view':
+
+	    $settings = _subnode_get_settings();
+      $types    = node_get_types('names');
+
+		  //during the 'node preview' process the subnode_children will not be loaded, but submitted form data
+			//is available in the $node object; we need to fake the subnode_children to get content to render properly
+    	if(in_array($node->type, array_keys($settings)) && empty($node->subnode_children)) {
+				foreach((array) $node as $key => $field) {
+					//identify subnode form data
+					if(preg_match('/^subnode_('.implode('|', array_keys($types)).')$/i', $key)) {
+						foreach($field as $i => $data) {
+							if(is_array($data)) {
+								//existing node
+								if($data['nid']) {
+									$obj = node_load($data['nid']);
+								}
+								//new node
+								else {
+									//find an existing node of this type, and modify it
+									//TODO: this will cause problems if no existing nodes are present in the database
+									$obj = node_load(array('type' => $data['type']));
+									$obj->nid = 0;
+								}
+								
+								if($obj) {
+                  $node->subnode_children[$data['type']][$obj->nid] = $obj;
+									
+									foreach($data as $obj_key => $obj_field) {
+										//regular key=value fields
+										if(!is_array($obj_field)) {
+											$node->subnode_children[$data['type']][$obj->nid]->{$obj_key} = $obj_field;
+										}
+										//body field is nested
+										elseif($obj_key == 'body_field') {
+											$node->subnode_children[$data['type']][$obj->nid]->body = $obj_field['body'];
+										}
+										//cck fields
+										else {
+											
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+	    if(!empty($node->subnode_children)) {
+	    	$items = array();
+				
+		    foreach($node->subnode_children as $subtype => $children) {
+		    	$output = '';
+					
+          $i = 0;					
+					foreach($children as $child) {
+						$child->subnode_zebra = ($i % 2) ? 'even' : 'odd';
+						
+						if($i == 0 && $settings[$node->type][$subtype] == 1) {
+							$output .= '<a name="subnode-section-'. $child->type .'" id="subnode-section-'. $child->type .'"></a>';
+						}
+						
+						$output .= node_view($child);
+						
+						if($i == 0) {
+							$title = $settings[$node->type][$subtype] != 1 ? $types[$subtype].'s' : $child->title;
+							
+							$url = drupal_is_front_page() ? $_GET['q'] : 'node/'.$node->nid; 
+							
+							$items[] = array(
+							  'title'  => l($title, $url, array('fragment' => 'subnode-section-'.$child->type)),
+								'weight' => content_extra_field_weight($node->type, 'subnode_'.$node->type.'_'.$child->type),
+							);
+						}
+						
+						$i++;
+					}
+					
+					if($settings[$node->type][$subtype] != 1) {
+						$output = '<a name="subnode-section-'. $subtype .'" id="subnode-section-'. $subtype .'"></a>' . theme('subnode_section_wrapper', $subtype, $types[$subtype].'s', $output, $node);
+					}
+					
+					//add the subnode output
+			      $node->content['subnode_'.$node->type.'_'.$subtype] = array(
+						  '#value'     => $output,
+							'#elements'  => array(),
+							'#weight'    => content_extra_field_weight($node->type, 'subnode_'.$node->type.'_'.$subtype),
+						);
+				}
+				
+				//prepare links to subnode sections
+					if(!empty($items)) {
+						usort($items, '_subnode_sort_weight');
+						
+						foreach($items as &$item) {
+							$item = $item['title'];
+						}
+						
+						$node->subnode_links = theme('item_list', $items);
+					}
+			}
+					   
+			break;
+		
+		case 'prepare':
+			
+			$settings = _subnode_get_settings();
+
+			if(isset($settings[$node->type])) {
+				foreach($settings[$node->type] as $subtype => $quantity){
+					if($quantity != 0) {
+					  //if this is a node with subnodes, we need to reset the internal field count
+            _subnode_reset_field_count();
+						break;	
+					}
+				}
+			}
+					
+		  break;
+			
+		case 'insert':
+		case 'update':
+			
+			//create associations with parent subnodes
+				if(isset($node->subnode_parent) && !db_result(db_query("SELECT id FROM {subnode} WHERE parent = %d and child = %d", $node->subnode_parent, $node->nid))) {
+					$object = new stdClass;
+					$object->parent  = $node->subnode_parent;
+					$object->child   = $node->nid;
+
+					drupal_write_record('subnode', $object);
+				}
+		
+			//find and save individual subnodes
+				$node_array = (array) $node;
+				foreach($node_array as $key => $elements) {
+					 if(preg_match('/^subnode_('.implode('|', array_keys(node_get_types('names'))).')$/', $key)) {
+	           //make sure that there are subnodes to be processed here
+						 unset($elements['add_subform']);
+						 if(!empty($elements)) {
+	             foreach($elements as $value) {
+								 $node_data = array();
+			
+								 foreach($value as $field => $data) {
+								   //CCK field
+								   if(preg_match('/^field_./', $field) && is_array($data)) {
+								   	 $node_data[$field] = $data;
+									 }
+									 //body field - special case
+									 elseif($field == 'body_field') {
+									   $node_data['body'] = $data['body'];
+									 }
+									 //format token field - special case
+									 elseif($field == 'format_token') {
+									   if(isset($node->{'format_'.$data})) {
+									     $node_data['format'] = $node->{'format_'.$data};
+										 }
+									 }
+									 //regular field
+									 else {
+									   $node_data[$field] = $data;
+									 }
+								 }
+								 
+								 //bring in workflow options data
+								 foreach(variable_get('node_options_'.$node_data['type'], array()) as $field)  {
+								   $node_data[$field] = 1;
+								 }
+
+								 //set misc data
+								 $node_data += array(
+								   'uid'                    => $node->uid,
+									 'name'                   => $node->name,
+									 
+									 'format'                 => '',
+									 'created'                => $node->created,
+									 'changed'                => $node->changed,
+									 'date'                   => date(DATE_ATOM, $node->created),
+									 'revision'               => 0,
+			             'log'                    => '',
+			             'taxonomy'               => array(),
+									  
+			             'comment'                => variable_get('comment_'.$node_data['type'], COMMENT_NODE_READ_WRITE),
+									 'comment_count'          => 0,
+									 'last_comment_timestamp' => '',   
+									 'last_comment_name'      => NULL,
+									 
+									 'subnode_parent'         => $node->nid,
+								 );
+								 
+								 $new_node = new stdClass;
+	               $new_node = node_submit($node_data);
+	               node_save($new_node);
+						   }
+						 }
+					 }
+				}
+					
+			break;
+			
+		case 'delete':
+			
+			//delete any subnodes		
+				if(!empty($node->subnode_children)) {
+					$result = db_query("SELECT child FROM {subnode} WHERE parent = %d", $node->nid);
+					
+					while($row = db_fetch_object($result)) {
+						node_delete($row->child);
+					}
+				}
+					
+			//delete any child-parent relationships
+			  db_query("DELETE FROM {subnode} WHERE parent = %d OR child = %d", $node->nid, $node->nid);
+					
+			break;
+	}
+}
+
+/**
+ * Implementation of hook_theme();
+ */
+function subnode_theme($existing, $type, $theme, $path)
+{
+  return array(
+    'subnode_remove_confirm' => array(
+      'arguments' => array(),
+    ),
+		'subnode_section_wrapper' => array(
+		  'arguments' => array(
+			  'subtype'  => NULL,
+				'title'    => NULL,
+				'data'     => NULL,
+				'node'     => NULL,
+			),
+			'template' => 'subnode-section-wrapper',
+			'path' => SUBNODE_PATH.'/theme',
+		),
+  );
+}
+
+/************************************************************
+					MODULE HOOKS
+************************************************************/
+
+/**
+ * Implementation of hook_content_extra_fields();
+ * We use this to add our subnodes to CCK's "manage fields" page.
+ */
+function subnode_content_extra_fields($type)
+{
+	$extra 		= array();	
+	$settings	= _subnode_get_settings();
+	$types		= node_get_types('names');
+	
+	if(isset($settings[$type])) {
+		foreach($settings[$type] as $subtype => $quantity) {
+			if($quantity) {
+				$extra['subnode_'.$type.'_'.$subtype] = array(
+					'label' => t('"!type" subnode', array('!type' => $types[$subtype])),
+					'description' => t('Subnode of !type content type.', array('!type' => '<em>'.$types[$subtype].'</em>')),					
+				);
+			}
+		}
+	}
+	
+  return $extra;
+}
+
+/************************************************************
+					FORMS
+************************************************************/
+
+/**
+ * Submit handler for node_type_form();
+ * Saves subnode data.
+ */
+function subnode_node_type_form_submit($form, &$form_state)
+{
+	$settings = _subnode_get_settings(TRUE);
+	
+	foreach($form_state['values']['subnode'] as $subtype => $quantity) {
+		$object = new stdClass;
+		$update = array();
+		
+		if(isset($settings[$form_state['values']['type']][$subtype])) {
+			$object->id = $settings[$form_state['values']['type']][$subtype]->id;
+			$update[] = 'id';
+		}
+		
+		if($quantity == 'unlimited') {
+			$quantity = -1;
+		}
+		
+		$object->type 		= $form_state['values']['type'];
+		$object->subtype	= $subtype;
+		$object->quantity	= $quantity;
+				
+		drupal_write_record('subnode_settings', $object, $update);			
+	}
+}
+
+/**
+ * After-build handler for node forms.
+ */
+function subnode_node_form_after_build($form, &$form_state) 
+{
+  //create a map of filefield elements' #id properties, and the
+  //ahah path they should submit to
+    $paths_map = array();
+		
+	//record "full" AHAH objects
+		$ahah_objects = array();		
+
+    foreach($form as $key => $field) {
+      if(preg_match('/^field_/', $key)) {
+        static $count;
+				
+				if(is_null($count)) {
+					$count = 0;
+				}
+				  
+				foreach($field as $subkey => $value) {
+          if(is_numeric($subkey) && isset($value['#type']) && preg_match('/field_widget$/', $value['#type'])) {
+					  foreach(module_invoke_all('subnode_fields', 'define', $value) as $field_name => $ahah_field) {
+  						//grab the data
+							  $id = $ahah_field['id'];
+  							$paths_map[$id] = _subnode_convert_filefield_path($ahah_field['path'], $count);
+
+							//build full AHAH objects
+							  $wrapper = explode('-', $id);
+								array_pop($wrapper);
+								array_pop($wrapper);
+								$wrapper[] = 'ahah';
+								$wrapper[] = 'wrapper';
+								$wrapper = implode('-', $wrapper);
+							
+							  $ahah_objects[$id] = array(
+								  'button'    => array(
+									  $ahah_field['button'] => $ahah_field['button_text'],
+									),
+									'effect'    => 'fade',
+									'element'   => '',
+									'event'     => 'mousedown',
+									'keypress'  => true,
+									'method'    => 'replace',
+									'progress'  => array(
+									  'type'    => 'throbber',
+									),
+									'selector'  => '#'.$id,
+									'url'       => $paths_map[$id],
+									'wrapper'   => $wrapper,
+								);
+						}
+						
+						$count++;
+          }
+        }
+      }
+    }
+
+  //create and add JavaScript to override paths - this works great on page load, 
+	//but needs to be re-done by JavaScript for AHAH-added subforms
+    if(!empty($paths_map)) {
+      $js = '';
+      foreach($paths_map as $element => $path) {
+        $js .= 'Drupal.settings.ahah["'.$element.'"].url = "'.$path.'";'."\n";
+      }
+      
+			$object_js = '';			
+			foreach($ahah_objects as $key => $data) {
+				 $object_js .= 'Drupal.settings.ahah["'.$key.'"] = '.drupal_to_js($data).';';
+			}
+			
+      if(!empty($js)) {
+        drupal_add_js($js, 'inline');
+				
+				//this will be accessed from subnode_ahah_subform();
+				drupal_add_js($object_js, 'inline', 'subnode'); 
+      }
+    }
+  
+	  //unset the filefield_remove form element; TODO: it still somehow gets into POST!!!	
+		/*
+    $types = node_get_types('names');
+    foreach($form as $key => $value) {
+      if(preg_match('/^subnode_('.implode('|', array_keys($types)).')$/', $key)) {
+	      //figure out what subtype this subnode section handles
+				$parts = explode('_', $key);
+				array_shift($parts);
+				$subtype = implode('_', $parts);
+				
+				$index = _subnode_get_field_count($subtype) - 1;
+        if(isset($form['subnode_critical_read'][$index]['field_image'][0]['filefield_remove']['#name'])) {
+		      //loop through file fields are unset 'Remove' buttons, otherwise image fields
+					//will have preview issues when triggered from AHAH-added subnodes
+					foreach($form['subnode_critical_read'][$index] as $field_name => $field) {
+						//we only need filefields & imagefields
+		      	if(preg_match('/^field_/', $field_name) && isset($field[0]['#type']) && preg_match('/field_widget$/', $field[0]['#type'])) {
+		      		foreach($form['subnode_critical_read'][$index][$field_name] as $subkey => $subfield) {
+		      			if(is_numeric($subkey) && $subfield['#default_value']['fid'] == 0) {
+									unset($form['subnode_critical_read'][$index][$field_name][$subkey]['filefield_remove']);
+								}
+							}
+						}
+					}
+		    }				
+	    }
+		}
+		*/
+	
+  return $form;
+}
+
+/************************************************************
+					CALLBACKS
+************************************************************/
+
+/**
+ * Callback for subnode/ahah/subform/%d/%d
+ */
+function subnode_ahah_subform($type, $subtype)
+{
+	$settings = _subnode_get_settings();
+	$field_count = _subnode_get_field_count($subtype);
+
+	$output = '';
+
+	//make sure that we're not adding forms beyond the maximum number
+	if($field_count < $settings[$type][$subtype] || $settings[$type][$subtype] == 'unlimited') {
+		_subnode_increment_field_count($subtype);
+
+		$types = node_get_types('names');
+		
+	  $form = array(
+	    '#collapsed'    => TRUE,
+	    '#collapsible'  => TRUE,
+	    '#title'        => t('!type', array('!type' => $types[$subtype])),
+			'#tree'         => TRUE,
+	    '#type'         => 'fieldset',
+	  );
+	  
+		foreach(_subnode_add_subform_structure(array('type' => $subtype), TRUE) as $key => $value) {
+			 if(!isset($form[$key])) {
+			   $form[$key] = $value; 
+			 }
+		}
+	
+	  $form['remove'] = array(
+		  '#attributes' => array(
+			  'class'        => 'subform-remove',
+				'field_name'   => 'subnode_'.$subtype,
+				'field_count'  => $field_count,
+			),
+			'#suffix'     => theme('subnode_remove_confirm'),
+			'#title'      => t('Remove this !type', array('!type' => '<em>'.$types[$subtype].'</em>',)),
+	    '#type'       => 'checkbox',
+	  );
+	
+	  $output .= _subnode_ahah_render($form, 'subnode_'.$subtype, TRUE, $field_count);
+	  
+		$overrides = array();
+
+    $js = drupal_add_js(NULL, NULL, 'subnode');		
+		//one subform is added at a time, so we only want the last item, because all prior items
+    //already have their associated AHAH events
+		if($item = array_pop($js['inline'])) {
+			$output_js = $item['code'];
+		}
+		
+		$output .= theme('status_messages');
+		
+		$output .=   '
+		               <script>
+									   //do a one second delay to ensure the DOM contains the new form elements
+										 //before we start working with them									   
+										 setTimeout(function(){
+										 	 if(subnode) {
+                         subnode.formCallback();
+                         '.$output_js.'
+												 Drupal.behaviors.ahah();
+                       }
+										 }, 1000);
+									 </script>								 
+								 ';
+	}
+
+  echo drupal_to_js(array('data' => $output, 'status' => TRUE));
+  exit();
+}
+
+/**
+ * Callback for subnode/ahah/remove/%/%/%
+ */
+function subnode_ahah_remove($form_build_id, $field_name, $field_count)
+{
+	$output = _subnode_ahah_remove($form_build_id, $field_name, $field_count);
+	
+  echo drupal_to_js(array('data' => $output, 'status' => TRUE));
+  exit();
+}
+
+/**
+ * This is a modified copy of the callback for filefield/ahah/%/%/%/%;
+ * This overrides the original callback of filefield_js() - necessary to
+ * factor in additional logic for file uploads within subforms
+ */
+function subnode_ahah_filefield($type_name, $field_name, $delta, $field_count)
+{
+  $field = content_fields($field_name, $type_name);
+
+  //invalid request
+	  if(empty($field) || empty($_POST['form_build_id'])) {
+	    drupal_set_message(t('An unrecoverable error occurred. The uploaded file likely exceeded the maximum file size (@size) that this server supports.', array('@size' => format_size(file_upload_max_size()))), 'error');
+	    print drupal_to_js(array('data' => theme('status_messages')));
+	    exit;
+	  }
+
+  //build the new form.
+	  $form_state = array('submitted' => FALSE);
+	  $form_build_id = $_POST['form_build_id'];
+	  $form = form_get_cache($form_build_id, $form_state);
+
+  //invalid form_build_id
+	  if(!$form) {
+	    drupal_set_message(t('An unrecoverable error occurred. This form was missing from the server cache. Try reloading the page and submitting again.'), 'error');
+	    print drupal_to_js(array('data' => theme('status_messages')));
+	    exit;
+	  }
+
+  //build the form
+	  $args = $form['#parameters'];
+	  $form_id = array_shift($args);
+	  $form['#post'] = $_POST;
+		
+	  $form = form_builder($form_id, $form, $form_state);
+
+  //update the cached form with the new element at the right place in the form.
+	  if(module_exists('fieldgroup') && ($group_name = _fieldgroup_field_get_group($type_name, $field_name))) {
+	    if(isset($form['#multigroups']) && isset($form['#multigroups'][$group_name][$field_name])) {
+			  $form_element = $form[$group_name][$delta][$field_name];
+	    }
+	    else {
+	      $form_element = $form[$group_name][$field_name][$delta];
+	    }
+	  }
+		elseif(isset($form['subnode_'.$type_name][$field_count][$field_name][$delta])) {
+			$form_element = $form['subnode_'.$type_name][$field_count][$field_name][$delta];
+		}
+	  else {
+	    $form_element = $form[$field_name][$delta];
+	  }
+
+  //remove weight
+	  if(isset($form_element['_weight'])) {
+	    unset($form_element['_weight']);
+	  }
+
+  //render new element
+    $output = drupal_render($form_element);
+
+  //set the AHAH settings again
+	  $javascript = drupal_add_js(NULL, NULL);
+	  $filefield_ahah_settings = array();
+	  if(isset($javascript['setting'])) {
+	  	$fields_list = module_invoke_all('subnode_fields', 'list');
+			foreach($fields_list as &$field_name) {
+				$field_name = explode('_', $field_name);
+				
+				if(!empty($field_name) && $field_name[0] == 'filefield') {
+					array_shift($field_name);
+				}
+				
+				$field_name = implode('', $field_name);
+			}
+			$fields_list = implode('|', $fields_list);
+			
+	    foreach($javascript['setting'] as $settings) {
+	      if(isset($settings['ahah'])) {
+	        foreach($settings['ahah'] as $id => $ahah_settings) {
+	          if(preg_match('/filefield-('.$fields_list.')/', $id)) {
+							$ahah_settings['url'] = _subnode_convert_filefield_path($ahah_settings['url'], $field_count);
+							$filefield_ahah_settings[$id] = $ahah_settings;
+	          }
+	        }
+	      }
+	    }
+	  }
+
+  //add the AHAH settings
+	  if(!empty($filefield_ahah_settings)) {
+	    $output .= '<script type="text/javascript">jQuery.extend(Drupal.settings.ahah, '. drupal_to_js($filefield_ahah_settings) .');</script>';
+	  }
+
+  $output = theme('status_messages') . $output;
+
+  $GLOBALS['devel_shutdown'] = FALSE;
+  print drupal_to_js(array('status' => TRUE, 'data' => $output));
+  exit;
+}
+
+/************************************************************
+					THEMING
+************************************************************/
+
+function theme_subnode_remove_confirm()
+{
+  $output = '';
+	
+	$output =  '
+	             <div class="subnode-remove-confirm">
+								 '.theme('item_list', array(l(t('Yes, remove it.'), '', array('attributes' => array('class' => 'remove-yes'))), l(t('No, cancel.'), '', array('attributes' => array('class' => 'remove-no')))), t('Are you sure?')).'
+							 </div>
+						 ';
+	
+	return $output;
+}
+
+/************************************************************
+					INTERNAL
+************************************************************/
+
+/**
+ * Return a structured array of current subnode settings data. 
+ * @param object $full_row [optional] - flag to change the
+ * return structure in order to include the full database row
+ * @return 
+ */
+function _subnode_get_settings($full_row = FALSE)
+{
+	if(empty($data) || $full_row) {	
+  	$data = array();
+	 
+	  $result = db_query("SELECT * FROM {subnode_settings} ORDER BY id ASC");
+	
+	  while($row = db_fetch_object($result)) {	
+		  if($row->quantity == -1) {
+		  	$row->quantity = 'unlimited';
+			}
+		
+		  if($full_row) {
+				$data[$row->type][$row->subtype] = $row;
+			}
+			else {
+	  	  $data[$row->type][$row->subtype] = $row->quantity;
+			}
+	  }
+	}
+
+	return $data;
+}
+
+/**
+ * Loads the node add/edit form for specified content type,
+ * cleans it up and adds the structured FAPI array to 
+ * specified $existing_element.
+ * @param object $data
+ * @param object $add_nodepages [optional]
+ * @return 
+ */
+function _subnode_add_subform_structure($data = array(), $add_nodepages = FALSE)
+{
+	//load form for individul node
+	if(isset($data['nid'])) {
+    if(!($node = node_load($data['nid']))) {
+    	return FALSE;
+		}
+  }
+	//load form for content type
+  elseif(isset($data['type'])) {
+    $node = new stdClass;
+		$node->type = $data['type'];
+  }
+  //bad data	
+  else {
+    return FALSE;
+  }
+	
+	if($add_nodepages) {
+  	//this is required for AHAH callbacks
+		module_load_include('inc', 'node', 'node.pages');
+	}
+	
+	global $user;
+	
+	$form_state  = array();
+	
+	//get the subform, set a flag so we can distinguish between regularly-called
+	//forms and subforms in hook_form_alter(), and then execute form preparation,
+	//which will actually trigger hook_form_alter().
+		$form = drupal_retrieve_form($node->type.'_node_form', $form_state, $node);
+		$form['#subnode_include'] = TRUE;
+		drupal_prepare_form($node->type.'_node_form', $form, $form_state);
+
+	//remove everything except actual form elements, as well as nid and vid fields
+		foreach($form as $key => $element) {
+		  if(($key{0} == '#' || $key == 'buttons' || in_array($element['#type'], array('value', 'hidden', 'fieldset', 'token'))) && !in_array($key, array('nid', 'vid', '#after_build'))) {
+				unset($form[$key]);
+			}
+		}
+	
+	//remove JS, teaser info, and input format from body field
+		if(isset($form['body_field'])) {
+			//unset($form['body_field']['#after_build'], $form['body_field']['teaser_js'], $form['body_field']['teaser_include'], $form['body_field']['format']);
+			unset($form['body_field']['teaser_include'], $form['body_field']['teaser_js']);
+			
+			//set the format token
+			  $token = '';
+				
+        foreach($form['body_field']['format'] as $k => $v) {
+        	if(is_numeric($k) && isset($v['#parents'][0])) {
+        		$parts = explode('_', $v['#parents'][0]);
+						$token = $parts[1];
+					}
+				}
+			
+		    $form['format_token'] = array(
+		      '#type'   => 'hidden',
+		      '#value'  => $token,
+		    );
+		}
+	
+	  $form['type'] = array(
+		  '#type'   => 'hidden',
+			'#value'  => $node->type,
+		);
+	
+  //add class to title field so we can track changes and update the
+  //parent fieldset's title
+	  if(isset($form['title'])) {
+	    $form['title']['#attributes']['class'] = 'subform-title';
+	  }
+	
+	/*
+	if($count = _subnode_get_field_count($form['type']['#value'])) {
+		$index = $count - 1;
+		
+		foreach(element_children($form) as $field_name) {
+			if(preg_match('/^field_/', $field_name) && isset($form[$field_name][0])) {
+				$form[$field_name][$index] = $form[$field_name][0];
+				unset($form[$field_name][0]);
+			}
+		}
+	}
+	*/
+	
+  return !empty($form) ? $form : FALSE;
+}
+
+/**
+ * Helps render an AHAH element.
+ * Based on origininal ahah_render() function by Nick Lewis at
+ *  http://www.nicklewis.org/node/967
+ * @return 
+ * @param object $fields
+ * @param object $name
+ * @param object $use_array [optional]
+ */
+function _subnode_ahah_render($fields, $name, $use_array = FALSE, $index = 0)
+{
+  $form_state = array(
+    'submitted' => FALSE
+  );
+
+  $form_build_id = $_POST['form_build_id'];
+  
+  //add the new element to the stored form. Without adding the element to the
+  //form, Drupal is not aware of this new elements existence and will not
+  //process it. We retreive the cached form, add the element, and resave.
+  $form = form_get_cache($form_build_id, $form_state);
+
+  if($use_array) {
+    $form[$name][$index] = $fields;
+  }
+  else {
+    $form[$name] = $fields;
+  }
+
+  form_set_cache($form_build_id, $form, $form_state);
+  
+  $form += array(
+    '#post'       => $_POST,
+    '#programmed' => FALSE,
+  );
+
+  //rebuild the form.
+  $form = form_builder($_POST['form_id'], $form, $form_state);
+
+  //render the new output.
+  if($use_array) {
+    $new_form = $form[$name][$index];
+  }
+  else {
+    $new_form = $form[$name];
+  }
+  
+  return theme('status_messages').drupal_render($new_form); 
+}
+
+function _subnode_ahah_remove($form_build_id, $field_name, $field_count)
+{
+  $form_state = array(
+    'submitted' => FALSE
+  );
+
+  $form = form_get_cache($form_build_id, $form_state);
+
+  if(isset($form[$field_name][$field_count]['nid'])) {
+  	node_delete($form[$field_name][$field_count]['nid']['#value']);
+	}
+
+  _subnode_decrement_field_count($form[$field_name][$field_count]['type']['#value']);
+  unset($form[$field_name][$field_count]);
+	
+  form_set_cache($form_build_id, $form, $form_state);
+  
+  return '';
+}
+
+/**
+ * Returns internal field count for specified $subtype;
+ * @param object $subtype
+ * @return 
+ */
+function _subnode_get_field_count($subtype)
+{
+	$field_count = variable_get('subform_field_count', array());
+	
+	return isset($field_count[$subtype]) ? $field_count[$subtype] : 0;
+}
+
+/**
+ * Increments internal field count for specified $subtype;
+ * @param object $subtype
+ * @return 
+ */
+function _subnode_increment_field_count($subtype)
+{
+	$field_count = variable_get('subform_field_count', array());
+	
+  if(isset($field_count[$subtype])) {
+      $field_count[$subtype]++;
+  }
+  else {
+    $field_count[$subtype] = 1;
+  }
+  
+  variable_set('subform_field_count', $field_count);
+  
+  return $field_count[$subtype];
+}
+
+/**
+ * Decrements internal field count for specified $subtype;
+ * @param object $subtype
+ * @return 
+ */
+function _subnode_decrement_field_count($subtype)
+{
+	$field_count = variable_get('subform_field_count', array());
+  
+  if(isset($field_count[$subtype]) && $field_count[$subtype] > 0) {
+      $field_count[$subtype]--;
+  }
+  else {
+    $field_count[$subtype] = 0;
+  }
+  
+  variable_set('subform_field_count', $field_count);
+  
+  return $field_count[$subtype];
+}
+
+/**
+ * Resets internal field count.
+ * @return 
+ */
+function _subnode_reset_field_count()
+{
+	variable_set('subform_field_count', array());
+}
+
+/**
+ * Converts a /filefield path into the /subnode equivalent. 
+ * @param object $path
+ * @param object $count
+ * @return 
+ */
+function _subnode_convert_filefield_path($path, $count)
+{
+	$parts = explode('/', trim($path, '/'));
+  $parts[] = $count;
+
+  $path = implode('/', $parts);
+
+  $base = trim(base_path(), '/');
+	
+	if(!preg_match('/^'.$base.'/i', $path)) {
+		$path = $base.'/'.$path;
+	}
+
+  $path = '/'.$path;
+
+  return $path;
+}
+
+/**
+ * usort() callback to sort array items by 'weight' property
+ * @param object $a
+ * @param object $b
+ * @return 
+ */
+function _subnode_sort_weight($a, $b)
+{
+	$a = $a['weight'];
+	$b = $b['weight'];
+	
+  if($a == $b) {
+      return 0;
+  }
+	
+  return ($a < $b) ? -1 : 1;
+}

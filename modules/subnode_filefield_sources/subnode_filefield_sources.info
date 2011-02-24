@@ -1,0 +1,8 @@
+name = Subnode Filefield Source
+description = Provides subnode integration with filefield_source.
+core = 6.x
+version = "6.x-1.0"
+project = "subnode_filefield_source"
+package = Casey
+dependencies[] = subnode
+ 

@@ -1,0 +1,42 @@
+<?php
+
+/************************************************************
+          MODULE HOOKS
+************************************************************/
+
+/**
+ * Implementation of hook_subnode_fields();
+ * Used to specify ahah-related data for filefields with
+ * sources;
+ * @param object $op
+ * @param object $element [optional]
+ * @return 
+ */
+function subnode_filefield_sources_subnode_fields($op, $element = NULL)
+{
+	$data = array();
+  
+  switch($op) {
+    case 'define':
+      
+      if(isset($element['filefield_imce'])) {
+		    $data['filefield_imce'] = array(
+		      'id'           => $element['filefield_imce']['select']['#id'],
+		      'path'         => $element['filefield_imce']['select']['#ahah']['path'],
+					'button'       => 'op',
+          'button_text'  => t('Select'),
+		    );
+		  }
+          
+      break;
+      
+    case 'list':
+      
+      $data[] = 'filefield_imce';
+          
+      break;
+  }
+  
+  return $data; 
+}
+

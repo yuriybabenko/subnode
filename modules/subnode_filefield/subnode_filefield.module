@@ -1,0 +1,54 @@
+<?php
+
+/************************************************************
+          MODULE HOOKS
+************************************************************/
+
+/**
+ * Implementation of hook_subnode_fields();
+ * Used to specify ahah-related data for filefields;
+ * @param object $op
+ * @param object $element [optional]
+ * @return 
+ */
+function subnode_filefield_subnode_fields($op, $element = NULL)
+{
+	$data = array();
+	
+	switch($op) {
+		case 'define':
+			
+			if(isset($element['filefield_upload'])) {
+		    $data['filefield_upload'] = array(
+		      'id'           => $element['filefield_upload']['#id'],
+		      'path'         => $element['filefield_upload']['#ahah']['path'],
+					'button'       => 'op',
+					'button_text'  => t('Upload'),
+		    );
+		  }
+		  
+		  if(isset($element['filefield_remove'])) {
+		    $button = explode('-', $element['filefield_remove']['#id']);
+        array_shift($button);
+        $button = implode('_', $button);
+				
+				$data['filefield_remove'] = array(
+		      'id'           => $element['filefield_remove']['#id'],
+		      'path'         => $element['filefield_remove']['#ahah']['path'],
+					'button'       => $button,
+          'button_text'  => t('Remove'),
+		    );
+		  }
+					
+			break;
+			
+		case 'list':
+			
+			$data[] = 'filefield_upload';
+			$data[] = 'filefield_remove';
+					
+			break;
+	}
+  
+  return $data;   
+}
